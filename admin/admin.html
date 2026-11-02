@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Upload to E-Library — Admin</title>
+<style>
+  :root { --brand: #14532d; --brand-2: #166534; --line: #e2e8f0; }
+  body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+         max-width: 620px; margin: 2rem auto; padding: 0 1rem; color: #0f172a; }
+  h1 { color: var(--brand); margin-bottom: .25rem; }
+  .sub { color: #64748b; font-size: .9rem; margin-bottom: 1.5rem; }
+  label { display: block; font-weight: 600; margin: 1rem 0 .35rem; font-size: .9rem; }
+  input, select {
+    width: 100%; padding: .65rem .75rem; border: 1px solid var(--line);
+    border-radius: 8px; font: inherit; background: #fff;
+  }
+  input:focus, select:focus { outline: 2px solid var(--brand-2); border-color: var(--brand-2); }
+  button {
+    margin-top: 1.5rem; width: 100%; padding: .85rem; background: var(--brand);
+    color: #fff; border: 0; border-radius: 8px; font: inherit; font-weight: 600;
+    cursor: pointer;
+  }
+  button:hover:not(:disabled) { background: var(--brand-2); }
+  button:disabled { opacity: .6; cursor: not-allowed; }
+  #progress {
+    margin-top: 1rem; font-size: .9rem; color: #64748b;
+    padding: .75rem 1rem; border-radius: 8px; background: #f8fafc;
+    display: none;
+  }
+  #progress.show { display: block; }
+  #progress.ok  { background: #dcfce7; color: #166534; }
+  #progress.err { background: #fee2e2; color: #991b1b; }
+  .auth-note {
+    background: #fef3c7; color: #92400e; padding: .75rem 1rem;
+    border-radius: 8px; font-size: .85rem; margin-bottom: 1rem; display: none;
+  }
+  .auth-note.show { display: block; }
+</style>
+</head>
+<body>
+  <h1>Upload Resource</h1>
+  <p class="sub">Add a book or past paper directly to Firestore (Max 1MB).</p>
+
+  <div id="auth-note" class="auth-note">
+    ⚠️ You must be signed in as an admin to upload. <a href="/tarantino/admin-login.html" style="color:#92400e;font-weight:bold">Sign in here</a> first.
+  </div>
+
+  <form id="upload-form">
+    <label>Title *</label>
+    <input id="title" required maxlength="200" placeholder="e.g. Physics Paper 1 2023">
+
+    <label>Author / Source</label>
+    <input id="author" maxlength="120" placeholder="e.g. UNEB">
+
+    <label>Subject</label>
+    <input id="subject" maxlength="60" placeholder="e.g. Physics">
+
+    <label>Level</label>
+    <select id="level">
+      <option value="O-Level">O-Level</option>
+      <option value="A-Level">A-Level</option>
+      <option value="General">General</option>
+    </select>
+
+    <label>PDF File * (Max 1MB)</label>
+    <input id="file" type="file" accept="application/pdf" required>
+
+    <button type="submit" id="btn" disabled>Checking login…</button>
+    <div id="progress"></div>
+  </form>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+    import { getFirestore, collection, addDoc, serverTimestamp }
+      from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+    import { getAuth, onAuthStateChanged }
+      from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyAUExS9Nka5TfNXjRfjXtc2jwDPaixmfrU",
+      authDomain: "e-library-dd680.firebaseapp.com",
+      projectId: "e-library-dd680",
+      storageBucket: "e-library-dd680.firebasestorage.app",
+      messagingSenderId: "960704565735",
+      appId: "1:960704565735:web:a1856b2c3e583da559ad42"
+    };
+
+    const app     = initializeApp(firebaseConfig);
+    const db      = getFirestore(app);
+    const auth    = getAuth(app);
+
+    const form     = document.getElementById("upload-form");
+    const btn      = document.getElementById("btn");
+    const prog     = document.getElementById("progress");
+    const authNote = document.getElementById("auth-note");
+
+    let currentUser = null;
+
+    onAuthStateChanged(auth, (user) => {
+      if (user) {
+        currentUser = user;
+        btn.disabled = false;
+        btn.textContent = "Upload to Firestore";
+        authNote.classList.remove("show");
+      } else {
+        currentUser = null;
+        btn.disabled = true;
+        btn.textContent = "Not signed in";
+        authNote.classList.add("show");
+      }
+    });
+
+    function setProg(text, cls) {
+      prog.textContent = text;
+      prog.className = "show" + (cls ? " " + cls : "");
+    }
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+
+      if (!currentUser) {
+        return setProg("Error: You are not signed in.", "err");
+      }
+
+      const file = document.getElementById("file").files[0];
+      if (!file) return setProg("Please select a PDF file.", "err");
+
+      if (file.type !== "application/pdf") {
+        return setProg("Only PDF files are allowed.", "err");
+      }
+
+      // Firestore limit is 1MB per document
+      if (file.size > 900 * 1024) {
+        return setProg("File is too large for Firestore. Must be under 900KB.", "err");
+      }
+
+      btn.disabled = true;
+      setProg("Converting and uploading to Firestore…");
+
+      // Read file as Base64
+      const reader = new FileReader();
+      reader.onload = async () => {
+        try {
+          const base64String = reader.result; // This is a Data URL
+
+          // Save directly to Firestore
+          await addDoc(collection(db, "library"), {
+            title:      document.getElementById("title").value.trim(),
+            author:     document.getElementById("author").value.trim(),
+            subject:    document.getElementById("subject").value.trim(),
+            level:      document.getElementById("level").value,
+            fileName:   file.name,
+            base64File: base64String, // Stored directly in database
+            uploadedBy: currentUser.uid,
+            created_at: serverTimestamp(),
+            downloads:  0
+          });
+
+          setProg("✅ Uploaded successfully to Firestore!", "ok");
+          form.reset();
+          btn.disabled = false;
+        } catch (err) {
+          console.error(err);
+          setProg("Failed to save to Firestore: " + err.message, "err");
+          btn.disabled = false;
+        }
+      };
+      
+      reader.onerror = () => {
+        setProg("Failed to read the file.", "err");
+        btn.disabled = false;
+      };
+
+      reader.readAsDataURL(file);
+    });
+  </script>
+</body>
+</html>
