@@ -117,7 +117,6 @@ onSnapshot(qAll, (snap) => {
   allBooks = snap.docs.map(d => ({ id: d.id, ...d.data() }));
   ready = true;
   
-  // Populate subject dropdown
   const subjects = [...new Set(allBooks.map(b => b.subject).filter(Boolean))].sort();
   if ($subject.options.length <= 1) {
     subjects.forEach(s => {
@@ -191,26 +190,45 @@ async function handleDownload(bookId, btn) {
 
     const book = docSnap.data();
     let downloadUrl = "";
-    const fileName = book.fileName || "document.pdf";
 
-    // Check if it's a Base64 file (Firestore method) or a URL (Storage method)
+    // 1. Get the file data
     if (book.base64File) {
-      downloadUrl = book.base64File;
+      // Convert Base64 to a real file (Blob) so phones don't rename it
+      const base64Data = book.base64File.split(',')[1];
+      const byteCharacters = atob(base64Data);
+      const byteNumbers = new Array(byteCharacters.length);
+      for (let i = 0; i < byteCharacters.length; i++) {
+        byteNumbers[i] = byteCharacters.charCodeAt(i);
+      }
+      const byteArray = new Uint8Array(byteNumbers);
+      const blob = new Blob([byteArray], { type: 'application/pdf' });
+      
+      downloadUrl = URL.createObjectURL(blob);
     } else if (book.fileUrl) {
       downloadUrl = book.fileUrl;
     } else {
       throw new Error("No file data found for this book.");
     }
 
-    // Create a temporary <a> tag to force the browser download
+    // 2. Set a clean file name based on the Title
+    // This replaces spaces with underscores and adds .pdf
+    const safeTitle = (book.title || "document").replace(/[^a-z0-9]/gi, '_');
+    const fileName = `${safeTitle}.pdf`;
+
+    // 3. Trigger the download
     const a = document.createElement("a");
     a.href = downloadUrl;
-    a.download = fileName; // Tells mobile browsers to save it to file manager
+    a.download = fileName; 
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
 
-    // Increment the download counter in Firestore
+    // 4. Clean up memory
+    if (book.base64File) {
+      setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
+    }
+
+    // 5. Increment counter
     await updateDoc(docRef, { downloads: increment(1) });
 
   } catch (err) {
