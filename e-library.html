@@ -15,6 +15,9 @@
   h1 { color: var(--brand); margin: 0 0 .25rem; }
   .sub { color: #64748b; margin: 0; font-size: .95rem; }
 
+  /* Hide the content until we confirm they are logged in */
+  #main-content { display: none; }
+
   .controls { display: flex; gap: .75rem; flex-wrap: wrap; margin-bottom: 1.25rem; }
   .controls input, .controls select {
     padding: .65rem .75rem; border: 1px solid var(--line); border-radius: 8px;
@@ -49,6 +52,9 @@
   .download-btn:disabled { opacity: .6; cursor: wait; }
 
   .empty { text-align: center; padding: 3rem 1rem; color: #64748b; }
+  .user-bar { display: flex; gap: .75rem; align-items: center; font-size: .85rem; margin-top: 1rem; }
+  .link-btn { background: none; border: 0; color: #991b1b; font-weight: 600;
+              cursor: pointer; font: inherit; text-decoration: underline; padding: 0; }
 
   @media (max-width: 600px) {
     .book { flex-direction: column; align-items: flex-start; }
@@ -57,29 +63,36 @@
 </style>
 </head>
 <body>
+
 <div class="wrap">
+  <div id="loading" style="text-align:center; padding: 3rem;">Checking login status...</div>
 
-  <div class="head">
-    <div>
-      <h1>E-Library</h1>
-      <p class="sub">Browse and download past papers, textbooks, and study resources.</p>
+  <div id="main-content">
+    <div class="head">
+      <div>
+        <h1>E-Library</h1>
+        <p class="sub">Browse and download past papers, textbooks, and study resources.</p>
+        <div class="user-bar">
+          <span>Signed in as: <strong id="user-email"></strong></span>
+          <button class="link-btn" id="signout-btn">Sign out</button>
+        </div>
+      </div>
     </div>
+
+    <div class="controls">
+      <input id="search" type="search" placeholder="Search by title or author…">
+      <select id="filter-subject"><option value="">All subjects</option></select>
+      <select id="filter-level">
+        <option value="">All levels</option>
+        <option value="O-Level">O-Level</option>
+        <option value="A-Level">A-Level</option>
+        <option value="General">General</option>
+      </select>
+    </div>
+
+    <div class="result-count" id="count">Loading books…</div>
+    <div id="list"></div>
   </div>
-
-  <div class="controls">
-    <input id="search" type="search" placeholder="Search by title or author…">
-    <select id="filter-subject"><option value="">All subjects</option></select>
-    <select id="filter-level">
-      <option value="">All levels</option>
-      <option value="O-Level">O-Level</option>
-      <option value="A-Level">A-Level</option>
-      <option value="General">General</option>
-    </select>
-  </div>
-
-  <div class="result-count" id="count">Loading…</div>
-  <div id="list"></div>
-
 </div>
 
 <script type="module">
@@ -88,8 +101,8 @@ import {
   getFirestore, collection, query, orderBy, onSnapshot,
   doc, getDoc, updateDoc, increment
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import { getAuth, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 
-// ───── YOUR CONFIG ─────
 const firebaseConfig = {
   apiKey: "AIzaSyAUExS9Nka5TfNXjRfjXtc2jwDPaixmfrU",
   authDomain: "e-library-dd680.firebaseapp.com",
@@ -101,6 +114,7 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
+const auth = getAuth(app);
 
 let allBooks = [];
 let ready = false;
@@ -111,20 +125,43 @@ const $search = document.getElementById("search");
 const $subject = document.getElementById("filter-subject");
 const $level = document.getElementById("filter-level");
 
-// ───── Load Books ─────
-const qAll = query(collection(db, "library"), orderBy("created_at", "desc"));
-onSnapshot(qAll, (snap) => {
-  allBooks = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-  ready = true;
-  
-  const subjects = [...new Set(allBooks.map(b => b.subject).filter(Boolean))].sort();
-  if ($subject.options.length <= 1) {
-    subjects.forEach(s => {
-      const o = document.createElement("option"); o.value = s; o.textContent = s; $subject.appendChild(o);
-    });
+// ───── AUTH GUARD ─────
+onAuthStateChanged(auth, (user) => {
+  if (!user) {
+    // Not logged in: redirect to login page immediately
+    window.location.href = "e-library-login.html";
+  } else {
+    // Logged in: show the library and load data
+    document.getElementById("loading").style.display = "none";
+    document.getElementById("main-content").style.display = "block";
+    document.getElementById("user-email").textContent = user.email;
+    
+    loadBooks();
   }
-  render();
 });
+
+// Sign out button
+document.getElementById("signout-btn").addEventListener("click", () => {
+  signOut(auth);
+});
+
+// ───── Load Books ─────
+function loadBooks() {
+  const qAll = query(collection(db, "library"), orderBy("created_at", "desc"));
+  onSnapshot(qAll, (snap) => {
+    allBooks = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    ready = true;
+    
+    // Populate subject dropdown
+    const subjects = [...new Set(allBooks.map(b => b.subject).filter(Boolean))].sort();
+    if ($subject.options.length <= 1) {
+      subjects.forEach(s => {
+        const o = document.createElement("option"); o.value = s; o.textContent = s; $subject.appendChild(o);
+      });
+    }
+    render();
+  });
+}
 
 // ───── Filters ─────
 [$search, $subject, $level].forEach(el => { 
@@ -191,9 +228,7 @@ async function handleDownload(bookId, btn) {
     const book = docSnap.data();
     let downloadUrl = "";
 
-    // 1. Get the file data
     if (book.base64File) {
-      // Convert Base64 to a real file (Blob) so phones don't rename it
       const base64Data = book.base64File.split(',')[1];
       const byteCharacters = atob(base64Data);
       const byteNumbers = new Array(byteCharacters.length);
@@ -210,12 +245,9 @@ async function handleDownload(bookId, btn) {
       throw new Error("No file data found for this book.");
     }
 
-    // 2. Set a clean file name based on the Title
-    // This replaces spaces with underscores and adds .pdf
     const safeTitle = (book.title || "document").replace(/[^a-z0-9]/gi, '_');
     const fileName = `${safeTitle}.pdf`;
 
-    // 3. Trigger the download
     const a = document.createElement("a");
     a.href = downloadUrl;
     a.download = fileName; 
@@ -223,12 +255,10 @@ async function handleDownload(bookId, btn) {
     a.click();
     document.body.removeChild(a);
 
-    // 4. Clean up memory
     if (book.base64File) {
       setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
     }
 
-    // 5. Increment counter
     await updateDoc(docRef, { downloads: increment(1) });
 
   } catch (err) {
@@ -240,13 +270,11 @@ async function handleDownload(bookId, btn) {
   }
 }
 
-// ───── Utility ─────
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
 }
 </script>
 
-<!-- site-wide banner -->
 <script type="module" src="/tarantino/announcement.js"></script>
 </body>
 </html>
