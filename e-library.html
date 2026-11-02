@@ -129,7 +129,7 @@ const $level = document.getElementById("filter-level");
 onAuthStateChanged(auth, (user) => {
   if (!user) {
     // Not logged in: redirect to login page immediately
-    window.location.href = "e-library-login.html";
+    window.location.href = "index.html";
   } else {
     // Logged in: show the library and load data
     document.getElementById("loading").style.display = "none";
